@@ -1,7 +1,7 @@
 """
 src/clustering/outliers.py — Outlier detection using Isolation Forest.
 
-Outliers are detected on PURE AUDIO FEATURES only (no release_year, no popularity).
+Outliers are detected on pure audio features only (no release_year).
 The IsolationForest model + raw scores are cached so the dashboard can
 re-threshold interactively without re-running the model.
 """

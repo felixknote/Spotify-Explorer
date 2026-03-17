@@ -94,7 +94,7 @@ def get_cluster_stats(
     numeric_cols = [
         "danceability", "energy", "loudness", "tempo",
         "valence", "acousticness", "instrumentalness",
-        "speechiness", "liveness", "popularity",
+        "speechiness", "liveness",
     ]
     available = [c for c in numeric_cols if c in df.columns]
     tmp = df[available].copy()

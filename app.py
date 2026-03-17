@@ -1,6 +1,9 @@
 """app.py — Bokeh server entry point."""
-import logging, pickle, sys
+import logging
+import pickle
+import sys
 from pathlib import Path
+
 from bokeh.io import curdoc
 
 ROOT = Path(__file__).parent
@@ -14,11 +17,14 @@ if not CACHE.exists():
     from bokeh.models import Div
     curdoc().add_root(Div(
         text="<h2 style='color:#f85149;font-family:monospace'>"
-             "No data found — run main.py first.</h2>"))
+             "No data found — run main.py first.</h2>",
+    ))
 else:
     with open(CACHE, "rb") as f:
         cache = pickle.load(f)
+
     from src.visualization.dashboard import SpotifyDashboard
+
     dash = SpotifyDashboard(
         df              = cache["df"],
         embedding       = cache["embedding"],

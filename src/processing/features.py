@@ -1,5 +1,10 @@
 """
 src/processing/features.py — Feature engineering, cleaning, and normalisation.
+
+Feature matrix layers:
+  Layer 1 — ReccoBeats audio features (9 continuous)     always included
+  Layer 2 — Release year                                 --no-meta disables
+  Layer 3 — Key / Mode one-hot                           when available
 """
 from __future__ import annotations
 
@@ -11,27 +16,30 @@ from sklearn.preprocessing import StandardScaler
 
 log = logging.getLogger(__name__)
 
-# Pure audio features from ReccoBeats — used for clustering and UMAP
 CORE_FEATURES = [
     "danceability", "energy", "loudness", "speechiness",
     "acousticness", "instrumentalness", "liveness", "valence", "tempo",
 ]
 
-# Optional metadata (release_year only — popularity removed from clustering)
 META_FEATURES = ["release_year"]
 
-# All numeric columns for descriptive statistics
-ALL_NUMERIC = CORE_FEATURES + ["popularity", "release_year"]
+
+ALL_NUMERIC = CORE_FEATURES + ["release_year"]
 
 
 def engineer_features(
     df: pd.DataFrame,
     include_meta: bool = True,
-    include_categorical: bool = False,   # key/mode not available from ReccoBeats
 ) -> tuple[pd.DataFrame, np.ndarray, StandardScaler, list[str]]:
     """
-    Clean and standardise features for UMAP + clustering.
-    Uses pure audio features only (no popularity/genre).
+    Build, clean, and standardise the feature matrix for UMAP + clustering.
+
+    Returns
+    -------
+    df_clean      : DataFrame with only tracks that have complete core features
+    X             : standardised feature matrix
+    scaler        : fitted StandardScaler
+    feature_names : column names matching X
     """
     df = df.copy()
 
@@ -42,41 +50,49 @@ def engineer_features(
         and df["tempo"].notna().any()
     )
 
-    if audio_available:
-        log.info("Audio features detected — using pure audio feature set (no popularity).")
-        before = len(df)
-        df = df.dropna(subset=CORE_FEATURES).reset_index(drop=True)
-        dropped = before - len(df)
-        if dropped:
-            log.warning("Dropped %d tracks with missing audio features.", dropped)
+    if not audio_available:
+        return _metadata_fallback(df)
 
-        # Fill release_year for optional inclusion
-        if include_meta and "release_year" in df.columns:
-            df["release_year"] = df["release_year"].fillna(df["release_year"].median())
+    # ── Core audio features ───────────────────────────────────────────────────
+    before = len(df)
+    df     = df.dropna(subset=CORE_FEATURES).reset_index(drop=True)
+    if before - len(df):
+        log.warning("Dropped %d tracks with missing core audio features.", before - len(df))
 
-        numeric_cols = CORE_FEATURES + (META_FEATURES if include_meta else [])
-        numeric_cols = [c for c in numeric_cols if c in df.columns]
-        feature_parts: list[pd.DataFrame] = [df[numeric_cols]]
+    feature_parts: list[pd.DataFrame] = [df[CORE_FEATURES]]
 
-    else:
-        log.warning("Audio features unavailable — falling back to metadata only.")
-        for col in ["release_year", "duration_min", "explicit"]:
-            if col in df.columns:
-                df[col] = df[col].fillna(df[col].median())
+    # ── Release year ──────────────────────────────────────────────────────────
+    if include_meta and "release_year" in df.columns:
+        df["release_year"] = df["release_year"].fillna(df["release_year"].median())
+        feature_parts.append(df[["release_year"]])
 
-        df = df.dropna(subset=["duration_min"]).reset_index(drop=True)
-        numeric_cols = [c for c in ["release_year", "duration_min", "explicit"]
-                        if c in df.columns]
-        feature_parts = [df[numeric_cols]]
-
-    feature_df = pd.concat(feature_parts, axis=1).astype(float)
+    # ── Assemble and scale ────────────────────────────────────────────────────
+    feature_df    = pd.concat(feature_parts, axis=1).astype(float)
     feature_names = list(feature_df.columns)
 
     scaler = StandardScaler()
-    X = scaler.fit_transform(feature_df)
+    X      = scaler.fit_transform(feature_df)
 
-    log.info("Feature matrix: %d tracks × %d features.", X.shape[0], X.shape[1])
+    log.info(
+        "Feature matrix: %d tracks × %d features  (%d audio | %d meta).",
+        X.shape[0], X.shape[1],
+        len(CORE_FEATURES),
+        1 if include_meta and "release_year" in df.columns else 0,
+    )
     return df, X, scaler, feature_names
+
+
+def _metadata_fallback(df: pd.DataFrame):
+    """Fallback when no audio features are available."""
+    log.warning("No audio features — using metadata-only fallback.")
+    for col in ["release_year", "duration_min", "explicit"]:
+        if col in df.columns:
+            df[col] = df[col].fillna(df[col].median())
+    df     = df.dropna(subset=["duration_min"]).reset_index(drop=True)
+    cols   = [c for c in ["release_year", "duration_min", "explicit"] if c in df.columns]
+    scaler = StandardScaler()
+    X      = scaler.fit_transform(df[cols].astype(float))
+    return df, X, scaler, cols
 
 
 def get_descriptive_stats(df: pd.DataFrame) -> pd.DataFrame:
@@ -84,22 +100,15 @@ def get_descriptive_stats(df: pd.DataFrame) -> pd.DataFrame:
     return df[available].describe().T.round(3)
 
 
-def get_correlation_matrix(df: pd.DataFrame) -> pd.DataFrame:
-    available = [c for c in CORE_FEATURES if c in df.columns]
-    return df[available].corr().round(3)
-
-
 def get_feature_importance_for_clusters(
     X_raw: np.ndarray,
     labels: np.ndarray,
     feature_names: list[str],
 ) -> pd.DataFrame:
+    """ANOVA F-statistic per feature — higher = more discriminative."""
     from scipy.stats import f_oneway
-    importances: dict[str, float] = {}
-    unique_labels = sorted(set(labels))
-    if -1 in unique_labels:
-        unique_labels.remove(-1)
-
+    unique_labels = [l for l in sorted(set(labels)) if l != -1]
+    importances   = {}
     for i, name in enumerate(feature_names):
         groups = [X_raw[labels == lbl, i] for lbl in unique_labels]
         if len(groups) >= 2 and all(len(g) > 0 for g in groups):
@@ -107,6 +116,10 @@ def get_feature_importance_for_clusters(
             importances[name] = float(f_stat) if not np.isnan(f_stat) else 0.0
         else:
             importances[name] = 0.0
-
-    series = pd.Series(importances).sort_values(ascending=False)
-    return series.rename("F_statistic").reset_index().rename(columns={"index": "feature"})
+    return (
+        pd.Series(importances)
+        .sort_values(ascending=False)
+        .rename("F_statistic")
+        .reset_index()
+        .rename(columns={"index": "feature"})
+    )

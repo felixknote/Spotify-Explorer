@@ -220,8 +220,6 @@ class SpotifyDashboard:
                 return df[col].fillna(default).round(4).tolist()
             return [default] * len(df)
 
-        key_labels = df["key_label"].tolist()  if "key_label"  in df.columns else ["?"]*len(df)
-        mode_labels= df["mode_label"].tolist() if "mode_label" in df.columns else ["?"]*len(df)
 
         self.source = ColumnDataSource(dict(
             x                = emb[:, 0].tolist(),
@@ -240,9 +238,6 @@ class SpotifyDashboard:
             speechiness      = _safe("speechiness", 0),
             loudness         = _safe("loudness", -10),
             duration_min     = _safe("duration_min", 0),
-            key_label        = key_labels,
-            mode_label       = mode_labels,
-            camelot          = df["camelot"].tolist() if "camelot" in df.columns else ["?"]*len(df),
             primary_genre    = df["primary_genre"].tolist() if "primary_genre" in df.columns else ["?"]*len(df),
             added_date       = df["added_date"].tolist() if "added_date" in df.columns else ["?"]*len(df),
             added_year       = df["added_year"].fillna(0).astype(int).tolist() if "added_year" in df.columns else [0]*len(df),
@@ -316,8 +311,6 @@ class SpotifyDashboard:
             ("Dance.",       "@danceability{0.00}"),
             ("Acoustic.",    "@acousticness{0.00}"),
             ("Instrument.",  "@instrumentalness{0.00}"),
-            ("Key / Mode",   "@key_label @mode_label"),
-            ("Camelot",       "@camelot"),
             ("Cluster",      "@cluster_str"),
             ("Outlier",      "@is_outlier_int"),
             ("Year",         "@release_year{0}"),
@@ -564,42 +557,7 @@ nn_label.text=`<b style='color:${ACCENT}'>5 nearest neighbours of: ${df_names[id
 
         hist_grid = gridplot(hist_plots, ncols=4, merge_tools=False)
 
-        # ── Key distribution (bar chart) ──────────────────────────────────────
-        key_available = ("key_label" in df.columns
-                         and df["key_label"].ne("?").any()
-                         and df["key_label"].notna().any())
-
-        if key_available:
-            key_order = ["C","C♯/D♭","D","D♯/E♭","E","F",
-                         "F♯/G♭","G","G♯/A♭","A","A♯/B♭","B"]
-            key_counts = df["key_label"].value_counts()
-            keys_present = [k for k in key_order if k in key_counts.index]
-            key_vals     = [int(key_counts.get(k, 0)) for k in keys_present]
-            pk = _fig("Key Distribution", w=380, h=230, x_range=keys_present)
-            pk.vbar(x=keys_present, top=key_vals, width=0.75,
-                    color=ACCENT_PURP, line_color=BG, alpha=0.9)
-            pk.xaxis.major_label_text_color = TEXT_HI
-            pk.xaxis.major_label_text_font_size = "10px"
-
-            mode_counts = df["mode_label"].value_counts() if "mode_label" in df.columns else {}
-            major = int(mode_counts.get("Major", 0))
-            minor = int(mode_counts.get("Minor", 0))
-            pm = _fig("Major vs Minor", w=240, h=230, x_range=["Major", "Minor"])
-            pm.vbar(x=["Major", "Minor"], top=[major, minor], width=0.6,
-                    color=[ACCENT_GREEN, ACCENT_RED], line_color=BG, alpha=0.9)
-            pm.xaxis.major_label_text_color = TEXT_HI
-            pm.xaxis.major_label_text_font_size = "12px"
-            key_row = row(pk, pm)
-            key_note = _div_sub("Key and Mode from GetSongBPM. Camelot notation shown in brackets.")
-        else:
-            key_note = _card(
-                f"<b style='color:{ACCENT_WARN}'>Key / Mode data not available</b><br>"
-                "ReccoBeats does not provide musical key or mode. "
-                "These fields require Spotify Extended Quota access.<br>"
-                "Apply at <a href='https://developer.spotify.com/dashboard' "
-                f"style='color:{ACCENT}'>developer.spotify.com/dashboard</a>"
-            )
-            key_row = key_note
+        key_row = Div(text="")
 
         s = self.stats
         summary = _card(
@@ -813,30 +771,12 @@ nn_label.text=`<b style='color:${ACCENT}'>5 nearest neighbours of: ${df_names[id
                      if f in df.columns and df[f].notna().any()]
 
         rows_data = []
-        has_key_data = (
-            "key_label" in df.columns
-            and df["key_label"].ne("?").any()
-        )
         for cid in sorted(df["cluster"].unique()):
             if cid == -1: continue
             sub = df[df["cluster"] == cid]
             rd  = {"cluster": str(cid), "count": len(sub)}
             for c in feat_cols:
                 rd[c] = round(sub[c].mean(), 3)
-            # Dominant key in this cluster
-            if has_key_data:
-                valid_keys = sub["key_label"][sub["key_label"] != "?"]
-                if len(valid_keys) > 0:
-                    top_key   = valid_keys.value_counts().index[0]
-                    top_mode  = sub.loc[valid_keys.index, "mode_label"].mode()
-                    top_mode  = top_mode.iloc[0] if len(top_mode) > 0 else "?"
-                    rd["dominant_key"] = f"{top_key} {top_mode}"
-                    # Camelot of dominant key
-                    cam_sub = sub[(sub["key_label"] == top_key) & (sub["camelot"] != "?")]
-                    rd["dominant_camelot"] = cam_sub["camelot"].mode().iloc[0] if len(cam_sub) > 0 else "?"
-                else:
-                    rd["dominant_key"]     = "?"
-                    rd["dominant_camelot"] = "?"
             idx = sub.index[0]
             rd["representative"] = f"{sub.loc[idx,'name']} — {sub.loc[idx,'artist']}"
             rows_data.append(rd)
@@ -853,9 +793,6 @@ nn_label.text=`<b style='color:${ACCENT}'>5 nearest neighbours of: ${df_names[id
             fmt = NumberFormatter(format="0.0") if f in ("tempo","loudness") \
                   else NumberFormatter(format="0.00")
             cols.append(TableColumn(field=f, title=f.capitalize()[:9], width=80, formatter=fmt))
-        if has_key_data:
-            cols.append(TableColumn(field="dominant_key",     title="Dom. Key",  formatter=StringFormatter(), width=90))
-            cols.append(TableColumn(field="dominant_camelot", title="Camelot",   formatter=StringFormatter(), width=70))
         cols.append(TableColumn(field="representative", title="Representative track", width=270))
 
         table = DataTable(source=tbl_src, columns=cols, width=980, height=240,
@@ -1072,7 +1009,7 @@ nn_label.text=`<b style='color:${ACCENT}'>5 nearest neighbours of: ${df_names[id
         res_src = ColumnDataSource(dict(
             name=[], artist=[], similarity=[], tempo=[],
             energy=[], valence=[], danceability=[], acousticness=[],
-            key_label=[], mode_label=[], camelot=[], added_date=[],
+            added_date=[],
         ))
         res_cols = [
             TableColumn(field="name",        title="Track",      formatter=StringFormatter(), width=230),
@@ -1083,9 +1020,6 @@ nn_label.text=`<b style='color:${ACCENT}'>5 nearest neighbours of: ${df_names[id
             TableColumn(field="valence",      title="Valence",    formatter=NumberFormatter(format="0.00"),  width=70),
             TableColumn(field="danceability", title="Dance.",     formatter=NumberFormatter(format="0.00"),  width=70),
             TableColumn(field="acousticness", title="Acoustic.",  formatter=NumberFormatter(format="0.00"),  width=75),
-            TableColumn(field="key_label",    title="Key",        formatter=StringFormatter(),                width=55),
-            TableColumn(field="mode_label",   title="Mode",       formatter=StringFormatter(),                width=55),
-            TableColumn(field="camelot",      title="Camelot",    formatter=StringFormatter(),                width=65),
             TableColumn(field="added_date",    title="Date Added", formatter=StringFormatter(),                width=100),
         ]
         res_table  = DataTable(source=res_src, columns=res_cols, width=960, height=300,
@@ -1131,21 +1065,14 @@ nn_label.text=`<b style='color:${ACCENT}'>5 nearest neighbours of: ${df_names[id
                 valence      = _c("valence"),
                 danceability = _c("danceability"),
                 acousticness = _c("acousticness"),
-                key_label    = _s("key_label"),
-                mode_label   = _s("mode_label"),
-                camelot      = _s("camelot"),
                 added_date   = _s("added_date"),
             )
             src_name   = df.iloc[idx]["name"]
             src_artist = df.iloc[idx]["artist"]
-            k   = df.iloc[idx].get("key_label", "?")
-            cam = df.iloc[idx].get("camelot", "?")
-            m = df.iloc[idx].get("mode_label", "?")
             status_div.text = (
                 f"<span style='color:{TEXT_MID}'>Showing {top} songs most similar to </span>"
                 f"<b style='color:{ACCENT}'>{src_name}</b>"
-                f"<span style='color:{TEXT_MID}'> by {src_artist}"
-                f" &nbsp;·&nbsp; Key: <b style='color:{ACCENT_PURP}'>{k} {m}</b></span>"
+                f"<span style='color:{TEXT_MID}'> by {src_artist}</span>"
             )
 
         search_btn = Button(label="Search", button_type="primary", width=110)
@@ -1260,7 +1187,6 @@ nn_label.text=`<b style='color:${ACCENT}'>5 nearest neighbours of: ${df_names[id
             release_year = _safe("release_year", 0),
             duration_min = _safe("duration_min", 0),
             added_year   = _safe("added_year", 0),
-            camelot      = df["camelot"].fillna("?").tolist() if "camelot" in df.columns else ["?"]*len(df),
             cluster_str  = cluster_labels,
             is_outlier   = is_outlier.tolist(),
             color        = colors,
@@ -1339,7 +1265,6 @@ nn_label.text=`<b style='color:${ACCENT}'>5 nearest neighbours of: ${df_names[id
             ("release_year",     "Year",          NumberFormatter(format="0"),     58),
             ("cluster_str",      "Cluster",       StringFormatter(),               65),
             ("added_date",        "Date Added",    StringFormatter(),               100),
-            ("camelot",            "Camelot",       StringFormatter(),                65),
         ]
 
         def _sorted_data(sort_col, descending, n):
@@ -1939,7 +1864,6 @@ nn_label.text=`<b style='color:${ACCENT}'>5 nearest neighbours of: ${df_names[id
             release_year = _safe("release_year", 0),
             duration_min = _safe("duration_min", 0),
             added_year   = _safe("added_year", 0),
-            camelot      = df["camelot"].fillna("?").tolist() if "camelot" in df.columns else ["?"]*len(df),
             cluster_str  = cluster_labels,
             is_outlier   = is_outlier.tolist(),
             color        = colors,
@@ -2018,7 +1942,6 @@ nn_label.text=`<b style='color:${ACCENT}'>5 nearest neighbours of: ${df_names[id
             ("release_year",     "Year",          NumberFormatter(format="0"),     58),
             ("cluster_str",      "Cluster",       StringFormatter(),               65),
             ("added_date",        "Date Added",    StringFormatter(),               100),
-            ("camelot",            "Camelot",       StringFormatter(),                65),
         ]
 
         def _sorted_data(sort_col, descending, n):
